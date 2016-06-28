@@ -1,6 +1,6 @@
 #include <fstream>
 #include <iostream>
-#include <brick-fs.h>
+#include "../../divine-current/bricks/brick-fs.h"
 #include <cctype>
 #include <algorithm>
 #include <iterator>

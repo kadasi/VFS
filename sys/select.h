@@ -114,7 +114,7 @@ typedef __fd_mask fd_mask;
 
 //typedef struct timeval tval;
 
-int myselect (int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, void *useless);
+int select (int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, void *useless);
 #ifdef __cplusplus
 }
 #endif

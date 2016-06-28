@@ -107,9 +107,6 @@ struct Manager {
     void changeDirectory( utils::String pathname );
     void changeDirectory( int dirfd );
 
-    void *mmap(int fd, off_t length, off_t offset, Flags<flags::Mapping> flags);
-    void munmap(void *directory);
-
     void chmodAt( int dirfd, utils::String name, mode_t mode, Flags< flags::At > fl );
     void chmod( int fd, mode_t mode );
 
@@ -137,7 +134,6 @@ private:
     std::array< Node, 2 > _standardIO;
     utils::Vector< std::shared_ptr< FileDescriptor > > _openFD;
     utils::List< DirectoryDescriptor > _openDD;
-    utils::Vector < std::unique_ptr< Memory > > _mappedMemory;
 
     unsigned short _umask;
 
@@ -151,7 +147,7 @@ private:
     int _getFileDescriptor( std::shared_ptr< FileDescriptor > f, int lowEdge = 0 );
     void _insertSnapshotItem( const SnapshotFS &item );
 
-    void _checkGrants( Node inode, mode_t grant ) const;
+    void _checkGrants( Node inode, unsigned grant ) const;
 
     void _chmod( Node inode, mode_t mode );
 

@@ -1,6 +1,6 @@
 // -*- C++ -*- (c) 2015 Jiří Weiser
 
-#include "sys/types.h"
+#include <sys/types.h>
 
 #ifndef _UNISTD_H_
 #define _UNISTD_H_
@@ -56,6 +56,8 @@ typedef __uint32_t useconds_t;
 FS_NOINLINE int close( int fd );
 FS_NOINLINE ssize_t read( int fd, void *buf, size_t count );
 FS_NOINLINE ssize_t write( int fd, const void *buf, size_t count );
+FS_NOINLINE int canRead (int fd);
+FS_NOINLINE int canWrite (int fd);
 
 FS_NOINLINE ssize_t pread( int fd, void *buf, size_t count, off_t offset );
 FS_NOINLINE ssize_t pwrite( int fd, const void *buf, size_t count, off_t offset );

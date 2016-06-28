@@ -4,8 +4,8 @@
 #define _BITS_TYPES_H
 
 #ifndef __clang__
-# error "Header file <bits/types.h> must be compiled via clang."
-#endif
+//# error "Header file <bits/types.h> must be compiled via clang."
+  #endif
 
 /* clang specific macros */
 typedef __SIZE_TYPE__               __size_t;
@@ -145,5 +145,7 @@ typedef unsigned long int   __u_long;
 #define __SIZEOF_INT        __SIZEOF_INT__
 #define __SIZEOF_LONG       __SIZEOF_LONG__
 #define __SIZEOF_LONG_LONG  __SIZEOF_LONG_LONG__
+
+
 
 #endif

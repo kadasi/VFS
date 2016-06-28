@@ -10,13 +10,11 @@
 #ifndef _FS_FILE_H_
 #define _FS_FILE_H_
 
+#define	SIGPIPE		13	/* Broken pipe (POSIX).  */
+//from header signum.h, which should be included with signal.h, but for some reason, compiler complained (Jakub)
+
 namespace divine {
 namespace fs {
-
-enum MemoryType{
-    Shared = 0,
-    Private = 1,
-};
 
 struct Link : DataItem {
 
@@ -47,7 +45,6 @@ struct File : DataItem {
     virtual void clear() = 0;
     virtual bool canRead() const = 0;
     virtual bool canWrite() const = 0;
-
 };
 
 struct RegularFile : File {
@@ -55,15 +52,13 @@ struct RegularFile : File {
     RegularFile( const char *content, size_t size ) :
         _snapshot( bool( content ) ),
         _size( content ? size : 0 ),
-        _roContent( content ),
-        count(0)
+        _roContent( content )
     {}
 
     RegularFile() :
         _snapshot( false ),
         _size( 0 ),
-        _roContent( nullptr ),
-        count(0)
+        _roContent( nullptr )
     {}
 
     RegularFile( const RegularFile &other ) = default;
@@ -96,9 +91,6 @@ struct RegularFile : File {
     }
 
     bool write( const char *buffer, size_t offset, size_t &length ) override {
-        if ( count ) {
-            throw Error( EBUSY );
-        }
         if ( _isSnapshot() )
             _copyOnWrite();
 
@@ -122,18 +114,6 @@ struct RegularFile : File {
         _size = _content.size();
     }
 
-    char* getPtr(size_t offset)  {
-        return &_content[offset];
-    }
-
-    void unlockWrite() {
-        --count;
-    }
-
-    void lockWrite() {
-        ++count;
-    }
-
 private:
 
     bool _isSnapshot() const {
@@ -152,7 +132,6 @@ private:
     size_t _size;
     const char *_roContent;
     utils::Vector< char > _content;
-    int count;
 };
 
 struct WriteOnlyFile : File {
@@ -724,60 +703,6 @@ private:
     utils::Queue< Packet > _packets;
     WeakNode _defaultRecipient;
 
-};
-
-struct Memory {
-
-    Memory(Flags <flags::Mapping> flags, size_t length, size_t offset, File *target) : offset( offset ) {
-        if ( flags.has(flags::Mapping::MapAnon )) {
-            type = Private;
-            memory = new( memory::nofail ) char[length]();
-            if ( memory == nullptr ) {
-                throw Error(ENOMEM);
-            }
-        } else {
-            file = target->as<RegularFile>();
-            if ( !file ) {
-                return;
-            }
-            if ( flags.has( flags::Mapping::MapPrivate )) {
-                type = Private;
-                memory = new(memory::nofail) char[length];
-                char *dst = reinterpret_cast< char * >( memory );
-                target->read(dst, offset, length);
-            } else {
-                type = Shared;
-                file->lockWrite();
-            }
-        }
-    }
-
-    Memory(const Memory &) = delete;
-    Memory &operator=(const Memory &) = delete;
-
-    void *getPtr() const {
-        if ( type == Private ) {
-            return memory;
-        }
-        return file ? file->getPtr( offset ) : nullptr;
-    }
-
-    ~Memory() {
-        if ( type == Private ) {
-            delete[] memory;
-        }
-        if ( type == Shared ) {
-            file->unlockWrite();
-        }
-    }
-
-private:
-    MemoryType type;
-    size_t offset;
-    union{
-        void *memory;
-        RegularFile *file;
-    };
 };
 
 } // namespace fs

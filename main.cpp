@@ -1,13 +1,40 @@
-#include <pthread.h>
-#include <unistd.h>
+//#include "sys/select.h"
+#include "unistd.h"
 #include <assert.h>
-#include <string.h>
+//#include <string.h>
+#include "fcntl.h"
+
 
 int main() {
-    char buf[ 8 ] = {};
-    int pfd[ 2 ];
-    assert( pipe( pfd ) == 0 );
-    read( pfd[ 0 ], buf, 7 );
-    assert( 0 );
+    int fd = open( "poll.h", O_RDONLY | O_CREAT, 0400 );
+    assert( fd >= 0 );
+
+    char ch[8];
+    read(fd, ch, 8);
+
+    int can;
+    can = canRead(fd);
+    can = canWrite(fd);
+
+//    fd_set rfds;
+//    FD_ZERO(&rfds);
+//    FD_SET(fd, &rfds);
+
+//    assert(myselect(1, &rfds, NULL, NULL, NULL) == 1);
+//    assert(FD_ISSET(fd, &rfds));
+//    FD_ZERO(&rfds);
+//    FD_SET(fd, &rfds);
+
+//    assert(myselect(1, NULL, &rfds, NULL, NULL) == 0);
+//    assert(!FD_ISSET(fd, &rfds));
+//    FD_ZERO(&rfds);
+//    FD_SET(fd, &rfds);
+
+//    assert(myselect(1, NULL, NULL, &rfds, NULL) == 1);
+//    assert(!FD_ISSET(fd, &rfds));
+//    FD_ZERO(&rfds);
+//    FD_SET(fd, &rfds);
+
+    assert( close( fd ) == 0 );
     return 0;
 }

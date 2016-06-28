@@ -41,8 +41,8 @@ struct FileDescriptor {
         if ( !file )
             throw Error( EBADF );
 
-        return file->canRead();
-    }
+        return file->canRead() && _flags.has(flags::Open::Read);
+    }               //         ------> EDIT Jakub
     bool canWrite() const {
         if ( !_inode )
             throw Error( EBADF );
@@ -51,8 +51,8 @@ struct FileDescriptor {
         if ( !file )
             throw Error( EBADF );
 
-        return file->canWrite();
-    }
+        return file->canWrite() && _flags.has(flags::Open::Write);
+    }               //          ------> EDIT Jakub
 
     virtual long long read( void *buf, size_t length ) {
         if ( !_inode )
@@ -129,7 +129,6 @@ struct FileDescriptor {
     Flags< flags::Open > flags() const {
         return _flags;
     }
-
     Flags< flags::Open > &flags() {
         return _flags;
     }

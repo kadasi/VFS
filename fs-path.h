@@ -17,8 +17,6 @@ namespace path {
 const char pathSeparators[] = { '/' };
 #elif defined( _WIN32 )
 const char pathSeparators[] = { '\\', '/' };
-#elif defined( __MAC_OS_X_VERSION_MAX_ALLOWED )
-        const char pathSeparators[] = { '/' };
 #endif
 
 inline bool isPathSeparator( char c ) {
