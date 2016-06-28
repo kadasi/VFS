@@ -5,6 +5,7 @@
 #include <cstdarg>
 #include <cstdlib>
 #include <cstring>
+#include <bitset>
 
 #include "bits/types.h"
 #include "sys/stat.h"
@@ -13,8 +14,18 @@
 #include "fcntl.h"
 #include "sys/socket.h"
 #include "sys/un.h"
+#include "sys/select.h"
+//#include "sys/poll.h"
 
 #include "fs-manager.h"
+
+#ifdef __divine__
+# define FS_MALLOC( x ) __divine_malloc( x )
+# define FS_PROBLEM( msg ) __divine_problem( 1, msg )
+#else
+# define FS_MALLOC( x ) std::malloc( x )
+# define FS_PROBLEM( msg )
+#endif
 
 #define FS_ENTRYPOINT()                                     \
     FS_ATOMIC_SECTION_BEGIN();                              \
@@ -35,75 +46,6 @@ using divine::fs::Error;
 using divine::fs::vfs;
 
 static bool underMask = false;
-
-static_assert( AT_FDCWD == divine::fs::CURRENT_DIRECTORY,
-    "mismatch value of AT_FDCWD and divine::fs::CURRENT_DIRECTORY" );
-
-namespace conversion {
-
-using namespace divine::fs::flags;
-
-divine::fs::Flags< Open > open( int fls ) {
-    divine::fs::Flags< Open > f = Open::NoFlags;
-    // special behaviour - check for access rights but do not grant them
-    if ( ( fls & 3 ) == 3)
-        f |= Open::NoAccess;
-    if ( fls & O_RDWR ) {
-        f |= Open::Read;
-        f |= Open::Write;
-    }
-    else if ( fls & O_WRONLY )
-        f |= Open::Write;
-    else
-        f |= Open::Read;
-
-    if ( fls & O_CREAT )    f |= Open::Create;
-    if ( fls & O_EXCL )     f |= Open::Excl;
-    if ( fls & O_TRUNC )    f |= Open::Truncate;
-    if ( fls & O_APPEND )   f |= Open::Append;
-    if ( fls & O_NOFOLLOW ) f |= Open::SymNofollow;
-    if ( fls & O_NONBLOCK ) f |= Open::NonBlock;
-    return f;
-}
-
-int open( divine::fs::Flags< Open > fls ) {
-    int f;
-    if ( fls.has( Open::NoAccess ) )
-        f = 3;
-    else if ( fls.has( Open::Read ) && fls.has( Open::Write ) )
-        f = O_RDWR;
-    else if ( fls.has( Open::Write ) )
-        f = O_WRONLY;
-    else
-        f = O_RDONLY;
-
-    if ( fls.has( Open::Create ) )      f |= O_CREAT;
-    if ( fls.has( Open::Excl ) )        f |= O_EXCL;
-    if ( fls.has( Open::Truncate ) )    f |= O_TRUNC;
-    if ( fls.has( Open::Append ) )      f |= O_APPEND;
-    if ( fls.has( Open::SymNofollow ) ) f |= O_NOFOLLOW;
-    if ( fls.has( Open::NonBlock ) )    f |= O_NONBLOCK;
-    return f;
-}
-
-divine::fs::Flags< Message > message( int fls ) {
-    divine::fs::Flags< Message > f = Message::NoFlags;
-
-    if ( fls & MSG_DONTWAIT )   f |= Message::DontWait;
-    if ( fls & MSG_PEEK )       f |= Message::Peek;
-    if ( fls & MSG_WAITALL )    f |= Message::WaitAll;
-    return f;
-}
-divine::fs::Flags< Mapping > map( int fls ) {
-    divine::fs::Flags< Mapping > f;
-
-    if ( fls & MAP_ANON )  { f |= Mapping::MapAnon; }
-    if ( fls & MAP_PRIVATE ) {  f |= Mapping::MapPrivate; }
-    if ( fls & MAP_SHARED )    {   f |= Mapping::MapShared; }
-    return f;
-}
-
-} // namespace conversion
 
 extern "C" {
 
@@ -132,9 +74,23 @@ static int _fillStat( const divine::fs::Node item, struct stat *buf ) {
 
 int openat( int dirfd, const char *path, int flags, ... ) {
     FS_ENTRYPOINT();
+    using namespace divine::fs::flags;
+    divine::fs::Flags< Open > f = Open::NoFlags;
     mode_t m = 0;
+    // special behaviour - check for access rights but do not grant them
+    if ( ( flags & 3 ) == 3)
+        f |= Open::NoAccess;
+    if ( flags & O_RDWR ) {
+        f |= Open::Read;
+        f |= Open::Write;
+    }
+    else if ( flags & O_WRONLY )
+        f |= Open::Write;
+    else
+        f |= Open::Read;
 
     if ( flags & O_CREAT ) {
+        f |= divine::fs::flags::Open::Create;
         va_list args;
         va_start( args, flags );
         if ( !args )
@@ -143,8 +99,19 @@ int openat( int dirfd, const char *path, int flags, ... ) {
         va_end( args );
     }
 
+    if ( flags & O_EXCL )
+        f |= divine::fs::flags::Open::Excl;
+    if ( flags & O_TRUNC )
+        f |= divine::fs::flags::Open::Truncate;
+    if ( flags & O_APPEND )
+        f |= divine::fs::flags::Open::Append;
+    if ( flags & O_NOFOLLOW )
+        f |= divine::fs::flags::Open::SymNofollow;
+
+    if ( dirfd == AT_FDCWD )
+        dirfd = divine::fs::CURRENT_DIRECTORY;
     try {
-        return vfs.instance().openFileAt( dirfd, path, conversion::open( flags ), m );
+        return vfs.instance().openFileAt( dirfd, path, f, m );
     } catch ( Error & ) {
         return -1;
     }
@@ -164,65 +131,7 @@ int open( const char *path, int flags, ... ) {
 }
 int creat( const char *path, mode_t mode ) {
     FS_ENTRYPOINT();
-    return mknodat( AT_FDCWD, path, mode | S_IFREG, 0 );
-}
-
-int fcntl( int fd, int cmd, ... ) {
-    FS_ENTRYPOINT();
-    try {
-        auto f = vfs.instance().getFile( fd );
-
-        switch ( cmd ) {
-        case F_SETFD: {
-            va_list args;
-            va_start( args, cmd );
-            if ( !args )
-                FS_PROBLEM( "command F_SETFD requires additional argument" );
-            int lowEdge = va_arg( args, int );
-            va_end( args );
-        }
-        case F_GETFD:
-            return 0;
-        case F_DUPFD_CLOEXEC: // for now let assume we cannot handle O_CLOEXEC
-        case F_DUPFD: {
-            va_list args;
-            va_start( args, cmd );
-            if ( !args )
-                FS_PROBLEM( "command F_DUPFD requires additional argument" );
-            int lowEdge = va_arg( args, int );
-            va_end( args );
-            return vfs.instance().duplicate( fd, lowEdge );
-        }
-        case F_GETFL:
-            return conversion::open( f->flags() );
-        case F_SETFL: {
-            va_list args;
-            va_start( args, cmd );
-            if ( !args )
-                FS_PROBLEM( "command F_SETFL requires additional argument" );
-            int mode = va_arg( args, int );
-            va_end( args );
-
-            if ( mode & O_APPEND )
-                f->flags() |= divine::fs::flags::Open::Append;
-            else if ( f->flags().has( divine::fs::flags::Open::Append ) )
-                throw Error( EPERM );
-
-            if ( mode & O_NONBLOCK )
-                f->flags() |= divine::fs::flags::Open::NonBlock;
-            else
-                f->flags().clear( divine::fs::flags::Open::NonBlock );
-
-            return 0;
-        }
-        default:
-            FS_PROBLEM( "the requested command is not implemented" );
-            return 0;
-        }
-
-    } catch ( Error & ) {
-        return -1;
-    }
+    return openat( AT_FDCWD, path, O_CREAT | O_WRONLY | O_TRUNC, mode );
 }
 
 int close( int fd ) {
@@ -278,7 +187,6 @@ ssize_t pread( int fd, void *buf, size_t count, off_t offset ) {
         return -1;
     }
 }
-
 int mkdirat( int dirfd, const char *path, mode_t mode ) {
     FS_ENTRYPOINT();
     try {
@@ -354,6 +262,8 @@ int unlinkat( int dirfd, const char *path, int flags ) {
         f = divine::fs::flags::At::Invalid;
         break;
     }
+    if ( dirfd == AT_FDCWD )
+        dirfd = divine::fs::CURRENT_DIRECTORY;
     try {
         vfs.instance().removeAt( dirfd, path, f );
         return 0;
@@ -400,6 +310,8 @@ int dup2( int oldfd, int newfd ) {
 }
 int symlinkat( const char *target, int dirfd, const char *linkpath ) {
     FS_ENTRYPOINT();
+    if ( dirfd == AT_FDCWD )
+        dirfd = divine::fs::CURRENT_DIRECTORY;
     try {
         vfs.instance().createSymLinkAt( dirfd, linkpath, target );
         return 0;
@@ -413,6 +325,10 @@ int symlink( const char *target, const char *linkpath ) {
 }
 int linkat( int olddirfd, const char *target, int newdirfd, const char *linkpath, int flags ) {
     FS_ENTRYPOINT();
+    if ( olddirfd == AT_FDCWD )
+        olddirfd = divine::fs::CURRENT_DIRECTORY;
+    if ( newdirfd == AT_FDCWD )
+        newdirfd = divine::fs::CURRENT_DIRECTORY;
 
     divine::fs::Flags< divine::fs::flags::At > fl = divine::fs::flags::At::NoFlags;
     if ( flags & AT_SYMLINK_FOLLOW )   fl |= divine::fs::flags::At::SymFollow;
@@ -433,6 +349,8 @@ int link( const char *target, const char *linkpath ) {
 
 ssize_t readlinkat( int dirfd, const char *path, char *buf, size_t count ) {
     FS_ENTRYPOINT();
+    if ( dirfd == AT_FDCWD )
+        dirfd = divine::fs::CURRENT_DIRECTORY;
     try {
         return vfs.instance().readLinkAt( dirfd, path, buf, count );
     } catch ( Error & ) {
@@ -451,6 +369,9 @@ int faccessat( int dirfd, const char *path, int mode, int flags ) {
     if ( mode & X_OK )  m |= divine::fs::flags::Access::Execute;
     if ( ( mode | R_OK | W_OK | X_OK ) != ( R_OK | W_OK | X_OK ) )
         m |= divine::fs::flags::Access::Invalid;
+
+    if ( dirfd == AT_FDCWD )
+        dirfd = divine::fs::CURRENT_DIRECTORY;
 
     divine::fs::Flags< divine::fs::flags::At > fl = divine::fs::flags::At::NoFlags;
     if ( flags & AT_EACCESS )   fl |= divine::fs::flags::At::EffectiveID;
@@ -627,6 +548,10 @@ int syncfs( int fd ) {
 
 int _FS_renameitemat( int olddirfd, const char *oldpath, int newdirfd, const char *newpath ) {
     FS_ENTRYPOINT();
+    if ( olddirfd == AT_FDCWD )
+        olddirfd = divine::fs::CURRENT_DIRECTORY;
+    if ( newdirfd == AT_FDCWD )
+        newdirfd = divine::fs::CURRENT_DIRECTORY;
     try {
         vfs.instance().renameAt( newdirfd, newpath, olddirfd, oldpath );
         return 0;
@@ -658,6 +583,8 @@ int fchmodeat( int dirfd, const char *path, mode_t mode, int flags ) {
     if ( ( flags | AT_SYMLINK_NOFOLLOW ) != AT_SYMLINK_NOFOLLOW )
         fl |= divine::fs::flags::At::Invalid;
 
+    if ( dirfd == AT_FDCWD )
+        dirfd = divine::fs::CURRENT_DIRECTORY;
     try {
         vfs.instance().chmodAt( dirfd, path, mode, fl );
         return 0;
@@ -846,293 +773,95 @@ void seekdir( DIR *dirp, long offset ) {
     }
 }
 #endif
-
-int socket( int domain, int t, int protocol ) {
-    using SocketType = divine::fs::SocketType;
-    using namespace divine::fs::flags;
-
-    FS_ENTRYPOINT();
-    try {
-
-        if ( domain != AF_UNIX )
-            throw Error( EAFNOSUPPORT );
-
-        SocketType type;
-        switch ( t & __SOCK_TYPE_MASK ) {
-        case SOCK_STREAM:
-            type = SocketType::Stream;
-            break;
-        case SOCK_DGRAM:
-            type = SocketType::Datagram;
-            break;
-        default:
-            throw Error( EPROTONOSUPPORT );
-        }
-        if ( protocol )
-            throw Error( EPROTONOSUPPORT );
-
-        return vfs.instance().socket( type, t & SOCK_NONBLOCK ? Open::NonBlock : Open::NoFlags );
-
-    } catch ( Error & ) {
-        return -1;
-    }
+int canRead (int fd) {
+    return vfs.instance().getFile(fd)->canRead();
 }
 
-int socketpair( int domain, int t, int protocol, int fds[ 2 ] ) {
-    using SocketType = divine::fs::SocketType;
-    using Open = divine::fs::flags::Open;
+int canWrite (int fd) {
+    return vfs.instance().getFile(fd)->canWrite();
+}
 
+int select (int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, void *useless) {
     FS_ENTRYPOINT();
-    try {
 
-        if ( domain != AF_UNIX )
-            throw Error( EAFNOSUPPORT );
-
-        SocketType type;
-        switch ( t & __SOCK_TYPE_MASK ) {
-        case SOCK_STREAM:
-            type = SocketType::Stream;
-            break;
-        case SOCK_DGRAM:
-            type = SocketType::Datagram;
-            break;
-        default:
-            throw Error( EPROTONOSUPPORT );
-        }
-        if ( protocol )
-            throw Error( EPROTONOSUPPORT );
-
-        std::tie( fds[ 0 ], fds[ 1 ] ) = vfs.instance().socketpair( type, t & SOCK_NONBLOCK ? Open::NonBlock : Open::NoFlags );
+    if (nfds <= 0 || (readfds == nullptr && writefds == nullptr && exceptfds == nullptr)) {
         return 0;
-    } catch ( Error & ) {
-        return -1;
     }
-}
 
-int getsockname( int sockfd, struct sockaddr *addr, socklen_t *len ) {
-    FS_ENTRYPOINT();
-    try {
-        if ( !len )
-            throw Error( EFAULT );
+    int ready = 0;
 
-        auto s = vfs.instance().getSocket( sockfd );
-        struct sockaddr_un *target = reinterpret_cast< struct sockaddr_un * >( addr );
-
-        auto &address = s->address();
-
-        if ( address.size() >= *len )
-            throw Error( ENOBUFS );
-
-        if ( target ) {
-            target->sun_family = AF_UNIX;
-            char *end = std::copy( address.value().begin(), address.value().end(), target->sun_path );
-            *end = '\0';
-        }
-        *len = address.size() + 1 + sizeof( target->sun_family );
-        return 0;
-    } catch ( Error & ) {
-        return -1;
-    }
-}
-
-int bind( int sockfd, const struct sockaddr *addr, socklen_t len ) {
-    FS_ENTRYPOINT();
-    using Address = divine::fs::Socket::Address;
-    try {
-
-        if ( !addr )
-            throw Error( EFAULT );
-        if ( addr->sa_family != AF_UNIX )
-            throw Error( EINVAL );
-
-        const struct sockaddr_un *target = reinterpret_cast< const struct sockaddr_un * >( addr );
-        Address address( target->sun_path );
-
-        vfs.instance().bind( sockfd, std::move( address ) );
-        return 0;
-    } catch ( Error & ) {
-        return -1;
-    }
-}
-
-int connect( int sockfd, const struct sockaddr *addr, socklen_t len ) {
-    FS_ENTRYPOINT();
-    using Address = divine::fs::Socket::Address;
-    try {
-
-        if ( !addr )
-            throw Error( EFAULT );
-        if ( addr->sa_family != AF_UNIX )
-            throw Error( EAFNOSUPPORT );
-
-        const struct sockaddr_un *target = reinterpret_cast< const struct sockaddr_un * >( addr );
-        Address address( target->sun_path );
-
-        vfs.instance().connect( sockfd, address );
-        return 0;
-    } catch ( Error & ) {
-        return -1;
-    }
-}
-
-int getpeername( int sockfd, struct sockaddr *addr, socklen_t *len ) {
-    FS_ENTRYPOINT();
-    try {
-        if ( !len )
-            throw Error( EFAULT );
-
-        auto s = vfs.instance().getSocket( sockfd );
-        struct sockaddr_un *target = reinterpret_cast< struct sockaddr_un * >( addr );
-
-        auto &address = s->peer().address();
-
-        if ( address.size() >= *len )
-            throw Error( ENOBUFS );
-
-        if ( target ) {
-            target->sun_family = AF_UNIX;
-            char *end = std::copy( address.value().begin(), address.value().end(), target->sun_path );
-            *end = '\0';
-        }
-        *len = address.size() + 1 + sizeof( target->sun_family );
-        return 0;
-    } catch ( Error & ) {
-        return -1;
-    }
-}
-
-ssize_t send( int sockfd, const void *buf, size_t n, int flags ) {
-    FS_ENTRYPOINT();
-    try {
-        auto s = vfs.instance().getSocket( sockfd );
-        return s->send( static_cast< const char * >( buf ), n, conversion::message( flags ) );
-    } catch ( Error & ) {
-        return -1;
-    }
-}
-
-ssize_t sendto( int sockfd, const void *buf, size_t n, int flags, const struct sockaddr *addr, socklen_t len ) {
-    FS_ENTRYPOINT();
-    using Address = divine::fs::Socket::Address;
-
-    if ( !addr )
-        return send( sockfd, buf, n, flags );
-
-    try {
-        if ( addr->sa_family != AF_UNIX )
-            throw Error( EAFNOSUPPORT );
-
-        auto s = vfs.instance().getSocket( sockfd );
-        const struct sockaddr_un *target = reinterpret_cast< const struct sockaddr_un * >( addr );
-        Address address( target ? target->sun_path : divine::fs::utils::String() );
-
-        return s->sendTo( static_cast< const char * >( buf ), n, conversion::message( flags ), vfs.instance().resolveAddress( address ) );
-    } catch ( Error & ) {
-        return -1;
-    }
-}
-
-ssize_t recv( int sockfd, void *buf, size_t n, int flags ) {
-    FS_ENTRYPOINT();
-    return recvfrom( sockfd, buf, n, flags, nullptr, nullptr );
-}
-
-ssize_t recvfrom( int sockfd, void *buf, size_t n, int flags, struct sockaddr *addr, socklen_t *len ) {
-    FS_ENTRYPOINT();
-    using Address = divine::fs::Socket::Address;
-
-    try {
-
-        Address address;
-        struct sockaddr_un *target = reinterpret_cast< struct sockaddr_un * >( addr );
-        if ( target && !len )
-            throw Error( EFAULT );
-
-        auto s = vfs.instance().getSocket( sockfd );
-        n = s->receive( static_cast< char * >( buf ), n, conversion::message( flags ), address );
-
-        if ( target ) {
-            target->sun_family = AF_UNIX;
-            char *end = std::copy( address.value().begin(), address.value().end(), target->sun_path );
-            *end = '\0';
-            *len = address.size() + 1 + sizeof( target->sun_family );
-        }
-        return n;
-    } catch ( Error & ) {
-        return -1;
-    }
-}
-
-int listen( int sockfd, int n ) {
-    FS_ENTRYPOINT();
-    try {
-        auto s = vfs.instance().getSocket( sockfd );
-        s->listen( n );
-        return 0;
-    } catch ( Error & ) {
-        return -1;
-    }
-}
-
-int accept( int sockfd, struct sockaddr *addr, socklen_t *len ) {
-    FS_ENTRYPOINT();
-    return accept4( sockfd, addr, len, 0 );
-}
-
-int accept4( int sockfd, struct sockaddr *addr, socklen_t *len, int flags ) {
-    FS_ENTRYPOINT();
-    using Address = divine::fs::Socket::Address;
-    try {
-
-        if ( addr && !len )
-            throw Error( EFAULT );
-
-        if ( ( flags | SOCK_NONBLOCK | SOCK_CLOEXEC ) != ( SOCK_NONBLOCK | SOCK_CLOEXEC ) )
-            throw Error( EINVAL );
-
-        Address address;
-        int newSocket =  vfs.instance().accept( sockfd, address );
-
-        if ( addr ) {
-            struct sockaddr_un *target = reinterpret_cast< struct sockaddr_un * >( addr );
-            target->sun_family = AF_UNIX;
-            char *end = std::copy( address.value().begin(), address.value().end(), target->sun_path );
-            *end = '\0';
-            *len = address.size() + 1 + sizeof( target->sun_family );
-        }
-        if ( flags & SOCK_NONBLOCK )
-            vfs.instance().getSocket( newSocket )->flags() |= divine::fs::flags::Open::NonBlock;
-
-        return newSocket;
-    } catch ( Error & ) {
-        return -1;
-    }
-}
-
-void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t offset) {
-    FS_ENTRYPOINT();
-    if (flags & MAP_FIXED) {
-        errno = ENOMEM;
-        return nullptr;
-    }
-    try {
-        return vfs.instance().mmap(fd, len, offset, conversion::map(flags));
-    } catch ( Error & ) {
-        return nullptr;
-    }
-}
-
-
-int munmap(void *addr, size_t len) {
-    if (addr != nullptr) {
-        try {
-            vfs.instance().munmap(addr);
-            return 0;
-        }catch (Error &){
-            return -1;
+    if (readfds != nullptr) {
+        for (unsigned i = 0; i < nfds || i < FD_SETSIZE; ++i) {
+            if (FD_ISSET(i, readfds) && vfs.instance().getFile(i)->canRead())
+                ++ready;
+            else
+                FD_CLR(i, readfds);
         }
     }
-    return -1;
+
+
+    if (writefds != nullptr) {
+        for (unsigned i = 0; i < nfds || i < FD_SETSIZE; ++i) {
+            if (FD_ISSET(i, writefds) && vfs.instance().getFile(i)->canWrite())
+                ++ready;
+            else
+                FD_CLR(i, writefds);
+        }
+    }
+
+
+    if (exceptfds != nullptr) {
+        for (unsigned i = 0; i < nfds || i < FD_SETSIZE; ++i) {
+            if (FD_ISSET(i, exceptfds) && vfs.instance().getFile(i)->size() == vfs.instance().getFile(i)->offset())
+                ++ready;
+            else
+                FD_CLR(i, exceptfds);
+        }
+    }
+
+    return ready;
 }
+
+//extern int poll (struct pollfd *fds, nfds_t nfds, int timeout) {
+//    FS_ENTRYPOINT();
+
+//    if (fds == nullptr || nfds <= 0) {
+//        return 0;
+//    }
+
+//    struct pollfd *current = fds;
+//    fd_set readfds, writefds;
+//    int ready = 0;
+
+//    for (unsigned i = 0; i < nfds; ++i, ++current) {
+//        if (current->fd < 0)
+//            continue;
+//        if (current->events && POLLIN) {
+//            FD_SET(current->fd, &readfds);
+//        }
+//        if (current->events && POLLOUT) {
+//            FD_SET(current->fd, &writefds);
+//        }
+//    }
+
+//    ready = select(nfds, &readfds, &writefds, nullptr, nullptr);
+
+//    current = fds;
+//    for (unsigned i = 0; i < nfds; ++i, ++current) {
+//        current->revents = 0;
+//        if (current->fd < 0)
+//            continue;
+//        if (FD_ISSET(current->fd, &readfds)) {
+//            current->revents |= POLL_OUT;
+//        }
+//        if (FD_ISSET(current->fd, &writefds)) {
+//            current->revents |= POLL_IN;
+//        }
+//    }
+
+
+//    return ready;
+//}
+
 
 } // extern "C"
